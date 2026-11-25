@@ -1,0 +1,79 @@
+{
+  "$schema": "../../schema/app.schema.json",
+  "id": "openrouter-video-edit",
+  "name": "OpenRouter Video Edit",
+  "section": "video",
+  "pack": "openrouter",
+  "backend": "openrouter",
+  "status": "ready",
+  "summary": "Edits your clip with a hosted model through OpenRouter: swap a person, change the place, relight, new angle. The Editing Room stacks these edits.",
+  "inputs": [
+    {
+      "id": "clip",
+      "type": "video",
+      "label": "Your clip",
+      "required": true,
+      "help": "OpenRouter takes the clip only as a web link: while the edit runs, a random one-off link (a Cloudflare quick tunnel) serves this one file, and it closes when the edit ends.",
+      "limits": { "max_mb": 100 }
+    },
+    {
+      "id": "reference",
+      "type": "image",
+      "label": "Reference image",
+      "help": "Optional: the person, outfit or place to put in. Seedance and Hailuo use it; FLUX and Runway go by the prompt alone.",
+      "limits": { "max_mb": 20 }
+    },
+    {
+      "id": "prompt",
+      "type": "textarea",
+      "label": "What to change",
+      "required": true,
+      "default": "Relight the scene with warm golden sunset light from the left; keep the people, their motion and the framing unchanged"
+    },
+    {
+      "id": "model",
+      "type": "select",
+      "label": "Model",
+      "help": "OpenRouter's prices in November 2026, per second of the result.",
+      "default": "black-forest-labs/flux-video-edit",
+      "options": [
+        { "value": "black-forest-labs/flux-video-edit", "label": "FLUX Video Edit · $0.03/s · objects, people, places, light" },
+        { "value": "bytedance/seedance-2.5", "label": "Seedance 2.5 · per token · follows a reference image" },
+        { "value": "minimax/hailuo-3", "label": "Hailuo 3 · $0.13/s (2K) · instruction edits, reference images" },
+        { "value": "runway/aleph-2", "label": "Runway Aleph 2 · $0.28/s (min $0.56) · new angles, camera, relight" }
+      ]
+    },
+    {
+      "id": "duration",
+      "type": "slider",
+      "label": "Length (s)",
+      "help": "For models that need a length (Hailuo 3): the source's length, moved to the nearest they offer. The others follow the source.",
+      "min": 3,
+      "max": 15,
+      "step": 1,
+      "default": 5
+    },
+    {
+      "id": "resolution",
+      "type": "select",
+      "label": "Resolution",
+      "default": "720p",
+      "options": [
+        { "value": "480p", "label": "480p" },
+        { "value": "720p", "label": "720p" },
+        { "value": "1080p", "label": "1080p" }
+      ]
+    },
+    {
+      "id": "audio",
+      "type": "toggle",
+      "label": "Sound",
+      "help": "Models that make audio add it (Seedance, Hailuo).",
+      "default": false
+    }
+  ],
+  "outputs": [{ "node": "openrouter", "type": "video" }],
+  "models": [],
+  "credits": ["OpenRouter video API: https://openrouter.ai/docs/guides/overview/multimodal/video-generation", "Cloudflare quick tunnels (cloudflared): https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/"],
+  "notes": "Runs on OpenRouter, not on your GPU. Needs cloudflared (CLOUDFLARED or on PATH): only the files of a running edit are served through it, from a separate local server, never the studio. A canceled run stops here only: OpenRouter has no cancel call."
+}

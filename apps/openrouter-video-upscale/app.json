@@ -1,0 +1,60 @@
+{
+  "$schema": "../../schema/app.schema.json",
+  "id": "openrouter-video-upscale",
+  "name": "OpenRouter Video Upscale",
+  "section": "video",
+  "pack": "openrouter",
+  "backend": "openrouter",
+  "status": "ready",
+  "summary": "Enlarges your clip 1.5 to 3 times with FLUX Video Upscale through OpenRouter, keeping its length. Billed per megapixel-second of the result.",
+  "inputs": [
+    {
+      "id": "clip",
+      "type": "video",
+      "label": "Your clip",
+      "required": true,
+      "help": "OpenRouter takes the clip only as a web link: while the upscale runs, a random one-off link (a Cloudflare quick tunnel) serves this one file, and it closes when it ends.",
+      "limits": { "max_mb": 100 }
+    },
+    {
+      "id": "model",
+      "type": "select",
+      "label": "Model",
+      "default": "black-forest-labs/flux-video-upscale",
+      "options": [
+        { "value": "black-forest-labs/flux-video-upscale", "label": "FLUX Video Upscale · $0.035 per megapixel-second (precise), $0.05 (creative)" }
+      ]
+    },
+    {
+      "id": "factor",
+      "type": "select",
+      "label": "Enlarge",
+      "default": 2,
+      "options": [
+        { "value": 1.5, "label": "1.5×" },
+        { "value": 2, "label": "2×" },
+        { "value": 3, "label": "3×" }
+      ]
+    },
+    {
+      "id": "creativity",
+      "type": "select",
+      "label": "Detail",
+      "default": 0,
+      "options": [
+        { "value": 0, "label": "Precise: sharpen what is there" },
+        { "value": 0.5, "label": "Creative: add finer detail (costs more)" }
+      ]
+    },
+    {
+      "id": "prompt",
+      "type": "textarea",
+      "label": "Guide (optional)",
+      "help": "What the detail should look like, e.g. \"sharp skin texture, film grain\". Leave it empty to just upscale."
+    }
+  ],
+  "outputs": [{ "node": "openrouter", "type": "video" }],
+  "models": [],
+  "credits": ["FLUX Video Upscale by Black Forest Labs, through OpenRouter: https://openrouter.ai/black-forest-labs/flux-video-upscale"],
+  "notes": "Runs on OpenRouter, not on your GPU. Needs cloudflared (CLOUDFLARED or on PATH) for the one-off link to the clip. For a free local upscale, see Video Upscale (SeedVR2) once its models are downloaded."
+}

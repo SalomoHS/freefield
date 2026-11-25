@@ -6,7 +6,7 @@ import { store } from "./util.js";
 const en = {
   "boot.error": "Is `npm run serve` running?", "status.ready": "Ready", "unit.gb": "GB", "unit.mb": "MB", "unit.s": "s",
   "nav.explore": "Explore", "nav.image": "Image", "nav.video": "Video", "nav.audio": "Audio", "nav.apps": "Apps", "nav.library": "Library",
-  "nav.vram": "VRAM map", "nav.create": "Create", "nav.lang": "Language", "nav.menu": "Menu",
+  "nav.vram": "VRAM map", "nav.create": "Create", "nav.lang": "Language", "nav.menu": "Menu", "nav.edit": "Edit",
   "menu.features": "Features", "menu.models": "Models", "menu.used": "{n} apps", "menu.used1": "1 app",
   "tag.featured": "Featured", "tag.new": "New", "tag.draft": "Draft", "tag.nopack": "Not on this GPU", "tag.top": "Top",
   "gpu.none": "No backend", "gpu.asleep": "GPU asleep", "gpu.waking": "Waking GPU · {s}s", "gpu.ready": "GPU ready", "gpu.failed": "Wake failed",

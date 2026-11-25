@@ -10,7 +10,7 @@ export type SetField = { node: string; field: string; value: unknown };
 export type Option = { value: unknown; label: string; sets?: SetField[] };
 export type Input = {
   id: string;
-  type: "text" | "textarea" | "number" | "slider" | "select" | "toggle" | "seed" | "image" | "video" | "audio";
+  type: "text" | "textarea" | "number" | "slider" | "select" | "toggle" | "seed" | "image" | "video" | "audio" | "media";
   label: string;
   help?: string;
   default?: unknown;
@@ -24,7 +24,9 @@ export type Input = {
   multiple?: { max?: number; join?: string; prefix?: string; suffix?: string; ordered?: boolean };
   /** image inputs: the image input this one is painted over in the web UI (a white-on-black mask) */
   paint?: string;
-  limits?: { max_mb?: number; seconds?: [number, number] };
+  /** shown only while each named select has one of the listed values */
+  when?: Record<string, unknown[]>;
+  limits?: { max_mb?: number; max_files?: number; seconds?: [number, number] };
   bind?: Bind[];
 };
 export type Preset = { id: string; label: string; sets: SetField[] };
@@ -54,6 +56,8 @@ export type AppManifest = {
   pack: string;
   status: "draft" | "ready";
   workflow?: string;
+  /** comfyui (default): the workflow on the GPU; openrouter: a hosted model, see server/openrouter.ts */
+  backend?: "comfyui" | "openrouter";
   inputs: Input[];
   presets?: Preset[];
   outputs: Output[];
@@ -67,7 +71,7 @@ export type AppManifest = {
 export type App = AppManifest & { dir: string; workflowPath?: string; graph?: ApiWorkflow };
 export type Problem = { app: string; severity: "error" | "warning"; message: string };
 
-const FILE_TYPES = new Set(["image", "video", "audio"]);
+const FILE_TYPES = new Set(["image", "video", "audio", "media"]);
 
 export function repoRoot(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -139,6 +143,15 @@ function checkGraph(app: App, problems: Problem[], severity: Problem["severity"]
     const src = app.inputs.find((i) => i.id === input.paint);
     if (input.type !== "image") say(`input "${input.id}": only an image input can be painted (paint)`);
     else if (!src || src.type !== "image" || src === input) say(`input "${input.id}": paint names "${input.paint}", which is not another image input`);
+  }
+  for (const input of app.inputs) {
+    // a workflow node takes one file; several at once is for the OpenRouter apps (references)
+    if (input.type === "media" && app.backend !== "openrouter") say(`input "${input.id}": a media input (several files) is for OpenRouter apps only`);
+    for (const [id, vals] of Object.entries(input.when ?? {})) {
+      const sel = app.inputs.find((i) => i.id === id);
+      if (!sel || sel.type !== "select" || sel === input) { say(`input "${input.id}": when names "${id}", which is not another select`); continue; }
+      for (const v of vals) if (!(sel.options ?? []).some((o) => o.value === v)) say(`input "${input.id}": when lists "${v}", not an option of "${id}"`);
+    }
   }
   for (const input of app.inputs) {
     if (!input.multiple) continue;
@@ -217,7 +230,7 @@ export function loadRegistry(root = repoRoot()): { apps: App[]; problems: Proble
       } else {
         problems.push({ app: folder, severity, message: `workflow ${manifest.workflow} not found` });
       }
-    } else if (manifest.status === "ready") {
+    } else if (manifest.status === "ready" && manifest.backend !== "openrouter") {
       problems.push({ app: folder, severity: "error", message: "ready apps need a workflow" });
     }
     if (app.graph) checkGraph(app, problems, severity);

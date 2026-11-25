@@ -2,12 +2,14 @@
 //   #/                 Explore         #/apps      the app store       #/app/<id>  an app's workspace
 //   #/image #/video #/audio            the studios (open the last app used there)
 //   #/library          history and lab examples                       #/vram      the VRAM map
+//   #/edit             the Editing Room (edits stacked on one clip)
 import { el, closePopover, toast, api } from "./util.js";
 import { t } from "./i18n.js";
 import { loadCatalog, byId, lastAppFor, studioOf, FEATURED, hosted, modelsPanel } from "./catalog.js";
 import { topbar, gpuState, pollGpu } from "./nav.js";
 import { exploreView, appsView, libraryView, vramView } from "./views.js";
 import { workspaceView, recreate, useIn } from "./workspace.js";
+import { editRoomView } from "./editroom.js";
 import { hooks, feed } from "./feed.js";
 import { openViewer } from "./viewer.js";
 import { openCompare } from "./compare.js";
@@ -33,6 +35,7 @@ function route() {
     location.replace(`#/app/${lastAppFor(studio[1])}`);
     return null;
   }
+  if (hash.startsWith("#/edit")) return editRoomView();
   if (hash.startsWith("#/apps")) return appsView();
   if (hash.startsWith("#/library")) return libraryView();
   if (hash.startsWith("#/vram")) return vramView(gpuState.data?.device ? gpuState.data : null);

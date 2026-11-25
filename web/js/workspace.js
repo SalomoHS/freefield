@@ -34,7 +34,7 @@ export function formFor(app) {
   const saved = store.get(`values.${app.id}`) || {};
   const values = {};
   for (const inp of app.inputs) {
-    if (isMedia(inp.type)) continue;
+    if (isMedia(inp.type) || inp.type === "media") continue;
     const fallback = inp.type === "textarea" || inp.type === "text" ? "" : inp.type === "seed" ? -1 : inp.multiple ? [...(inp.default ?? [])] : inp.default ?? "";
     values[inp.id] = validValue(inp, asPicks(inp, saved[inp.id])) ? asPicks(inp, saved[inp.id]) : fallback;
   }
@@ -47,8 +47,9 @@ function persist(app) {
   store.set(`values.${app.id}`, { ...f.values, __preset: f.preset });
 }
 
-const ACCEPT = { image: "image/*", video: "video/*", audio: "audio/*" };
+const ACCEPT = { image: "image/*", video: "video/*", audio: "audio/*", media: "image/*,video/*,audio/*" };
 function fileMatches(type, file) {
+  if (type === "media") return ["image", "video", "audio"].some((t) => fileMatches(t, file));
   if (file.type) return file.type.startsWith(`${type}/`);
   const ext = extOf(file.name);
   return { image: ["png", "jpg", "jpeg", "webp", "gif"], video: ["mp4", "mov", "webm", "mkv"], audio: ["mp3", "wav", "flac", "ogg", "m4a"] }[type]?.includes(ext);
@@ -70,9 +71,32 @@ function setFile(app, inp, file) {
   dropMasksOf(app, inp.id);
   return true;
 }
+/** A media input holds a list of files, each with its object url. */
+function addMedia(app, inp, files) {
+  const f = formFor(app);
+  const list = (f.files[inp.id] ||= []);
+  const most = inp.limits?.max_files ?? Infinity;
+  const maxMb = inp.limits?.max_mb;
+  let added = 0;
+  for (const file of files) {
+    if (!fileMatches("media", file)) { toast(`${inp.label}: ${file.name}?`, { error: true }); continue; }
+    if (maxMb && file.size > maxMb * 1e6) { toast(`${file.name}: ${t("ws.drop.mb", { mb: maxMb })}`, { error: true }); continue; }
+    if (list.length >= most) { toast(`${inp.label}: ${most} at most`, { error: true }); break; }
+    list.push({ file, url: URL.createObjectURL(file) });
+    added++;
+  }
+  return added;
+}
+function removeMedia(app, id, item) {
+  const f = formFor(app);
+  URL.revokeObjectURL(item.url);
+  f.files[id] = (f.files[id] || []).filter((x) => x !== item);
+}
+
 function clearFile(app, id) {
   const f = formFor(app);
-  if (f.files[id]) URL.revokeObjectURL(f.files[id].url);
+  if (Array.isArray(f.files[id])) for (const x of f.files[id]) URL.revokeObjectURL(x.url);
+  else if (f.files[id]) URL.revokeObjectURL(f.files[id].url);
   delete f.files[id];
   dropMasksOf(app, id);
 }
@@ -85,8 +109,10 @@ function dropMasksOf(app, id) {
 function assignFiles(app, files) {
   const slots = app.inputs.filter((i) => isMedia(i.type) && !i.paint);   // a painted mask is made with the brush, not dropped
   const f = formFor(app);
+  const multi = app.inputs.find((i) => i.type === "media" && shownIn(app, f, i));
   let used = 0;
   for (const file of files) {
+    if (multi && fileMatches("media", file)) { used += addMedia(app, multi, [file]); continue; }
     const free = slots.find((s) => fileMatches(s.type, file) && !f.files[s.id]) || slots.find((s) => fileMatches(s.type, file));
     if (free && setFile(app, free, file)) used++;
   }
@@ -100,11 +126,21 @@ async function fileFromUrl(url, name) {
   return new File([blob], name, { type: blob.type || res.headers.get("content-type") || "" });
 }
 
+/** Whether an input shows for the form's values: its "when" names selects and the values they must have. */
+function shownIn(app, f, inp) {
+  return Object.entries(inp.when || {}).every(([id, vals]) => {
+    const v = f.values[id] ?? app.inputs.find((i) => i.id === id)?.default;
+    return vals.some((x) => String(x) === String(v));
+  });
+}
+
 // ------------------------------------------------------------------ submitting
 function missingInputs(app) {
   const f = formFor(app);
   const out = [];
   for (const inp of app.inputs) {
+    if (!shownIn(app, f, inp)) continue;
+    if (inp.type === "media") { if (inp.required && !f.files[inp.id]?.length) out.push(inp); continue; }
     if (isMedia(inp.type)) { if (inp.required && !f.files[inp.id]) out.push(inp); continue; }
     if (inp.required && inp.type === "textarea" && !String(f.values[inp.id] ?? "").trim() && !inp.default) out.push(inp);
   }
@@ -115,6 +151,12 @@ function buildForm(app, { randomSeed = false } = {}) {
   const f = formFor(app);
   const fd = new FormData();
   for (const inp of app.inputs) {
+    if (!shownIn(app, f, inp)) continue;   // another mode's input: kept in the form, not sent
+    if (inp.type === "media") {
+      const list = f.files[inp.id] || [];
+      for (const x of list) fd.append(inp.id, x.file, x.file.name);
+      continue;
+    }
     if (isMedia(inp.type)) { const x = f.files[inp.id]; if (x) fd.append(inp.id, x.file, x.file.name); continue; }
     const v = f.values[inp.id];
     if (inp.type === "toggle") { fd.append(inp.id, v ? "true" : "false"); continue; }
@@ -172,12 +214,15 @@ export async function recreate(item, { run = false } = {}) {
   }
   f.preset = item.preset || "";
   try {
-    await Promise.all(item.inputs.map(async (i) => {
+    for (const inp of app.inputs) if (inp.type === "media") clearFile(app, inp.id);
+    const got = await Promise.all(item.inputs.map(async (i) => {
       const inp = app.inputs.find((x) => x.id === i.id);
-      if (!inp || !i.file) return;
+      if (!inp || !i.file) return null;
       const name = i.name || `${i.id}.${extOf(i.file) || "bin"}`;
-      setFile(app, inp, await fileFromUrl(i.file, name));
+      return { inp, file: await fileFromUrl(i.file, name) };
     }));
+    // in the order they were sent: a media input gets its files back as a list
+    for (const g of got) if (g) g.inp.type === "media" ? addMedia(app, g.inp, [g.file]) : setFile(app, g.inp, g.file);
   } catch (err) {
     toast(err.message, { error: true });
   }
@@ -515,7 +560,7 @@ function paintZone(app, inp, rerender) {
   return zone;
 }
 
-function dropzone(app, inp, rerender) {
+function dropzone(app, inp, rerender, { short = false } = {}) {
   if (inp.paint) return paintZone(app, inp, rerender);
   const f = formFor(app);
   const x = f.files[inp.id];
@@ -524,11 +569,11 @@ function dropzone(app, inp, rerender) {
   const limits = [inp.limits?.max_mb ? t("ws.drop.mb", { mb: inp.limits.max_mb }) : "", inp.limits?.seconds ? t("ws.drop.seconds", { a: inp.limits.seconds[0], b: inp.limits.seconds[1] }) : ""].filter(Boolean).join(" · ");
   let zone;
   if (!x) {
-    zone = el("div", { class: "drop", role: "button", tabindex: "0", dataset: { slot: inp.id }, "aria-label": t("ws.add", { what: inp.label }),
+    zone = el("div", { class: "drop", role: "button", tabindex: "0", dataset: { slot: inp.id }, "aria-label": t("ws.add", { what: inp.label }), title: short ? inp.help || null : null,
       onclick: () => input.click(), onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } } },
       el("span", { class: "ic" }, icon(inp.type === "image" ? "image" : inp.type === "video" ? "video" : "audio")),
       el("b", {}, inp.label, inp.required ? "" : el("span", { class: "faint", style: { fontWeight: 500 } }, ` · ${t("ws.optional")}`)),
-      el("small", {}, inp.help || t(`ws.drop.${inp.type}`)),
+      el("small", {}, (!short && inp.help) || t(`ws.drop.${inp.type}`)),
       el("small", { class: "faint" }, [t("ws.drop.hint"), limits].filter(Boolean).join(" · ")),
       input);
   } else {
@@ -616,6 +661,142 @@ function sideField(app, inp, f, ui) {
 
 const isAdvanced = (inp) => inp.type === "seed" || /negative/.test(inp.id);
 
+/**
+ * Hosted (OpenRouter) apps: their settings as cards, as in the Editing Room. The prompt card holds the switches (Sound),
+ * the model has a card of its own, the other choices sit two to a row; each opens its list, and the help text moves into
+ * that list. An option labelled "Name · detail" shows the detail under the name.
+ */
+const MODE_ICON = { frames: "image", start_end: "compare", refs: "layers", extend: "forward" };
+
+/** A media input: one box to drop images, videos and audio into, then a grid of what is in it. */
+function mediaBox(app, inp, rerender) {
+  const f = formFor(app);
+  const list = f.files[inp.id] || [];
+  const most = inp.limits?.max_files ?? Infinity;
+  const picker = el("input", { type: "file", accept: ACCEPT.media, multiple: true, hidden: true });
+  picker.addEventListener("change", () => { if (addMedia(app, inp, picker.files)) rerender(); picker.value = ""; });
+  const pick = () => picker.click();
+  const kinds = el("span", { class: "er-kinds", "aria-hidden": "true" }, icon("image"), icon("video"), icon("volume"));
+  let box;
+  if (!list.length) {
+    box = el("div", { class: "er-addrefs", role: "button", tabindex: "0", dataset: { slot: inp.id }, title: inp.help || null,
+      onclick: pick, onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } } },
+    kinds, el("b", {}, inp.label), el("small", {}, "Image, Video or Audio"), picker);
+  } else {
+    const tile = (x) => {
+      const kind = ["image", "video", "audio"].find((k) => fileMatches(k, x.file));
+      const media = kind === "image" ? el("img", { src: x.url, alt: "" })
+        : kind === "video" ? el("video", { src: x.url, muted: true, loop: true, playsinline: true, autoplay: true, preload: "auto" })
+          : el("span", { class: "er-audio" }, icon("volume"), el("small", {}, x.file.name));
+      if (kind === "video") media.muted = true;
+      const chip = kind === "image" ? null : el("span", { class: "er-role" }, kind === "video" ? "Video" : "Audio");
+      return el("div", { class: "er-reftile", title: x.file.name }, media, chip,
+        el("button", { class: "mini er-refx", type: "button", title: t("ws.remove"), "aria-label": `${t("ws.remove")} ${x.file.name}`,
+          onclick: (ev) => { ev.stopPropagation(); removeMedia(app, inp.id, x); rerender(); } }, icon("x")));
+    };
+    box = el("div", { class: "er-refbox", dataset: { slot: inp.id } },
+      el("div", { class: "er-refgrid" }, ...list.map(tile),
+        list.length < most ? el("button", { class: "er-refadd", type: "button", title: t("ws.add", { what: inp.label }), onclick: pick }, icon("plus")) : null),
+      el("p", { class: "er-refnote" }, `${list.length}${Number.isFinite(most) ? ` / ${most}` : ""} · The model takes the look from these, not the exact frame.`),
+      picker);
+  }
+  box.addEventListener("dragover", (e) => { e.preventDefault(); box.classList.add("over"); });
+  box.addEventListener("dragleave", () => box.classList.remove("over"));
+  box.addEventListener("drop", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    box.classList.remove("over");
+    if (addMedia(app, inp, e.dataTransfer.files)) rerender();
+  });
+  return box;
+}
+
+function cardFields(app, f, ui, rerender) {
+  const set = (inp, v) => { f.values[inp.id] = v; persistSoon(); };
+  // "Name · detail" or "Name: detail" → [name, detail]
+  const split = (label) => { const m = /^(.*?)(?: · |: )(.*)$/.exec(String(label)); return m ? [m[1], m[2]] : [String(label), ""]; };
+  // a select other inputs depend on ("when") is a mode switch: tabs on top, and only its inputs below
+  const switchIds = new Set(app.inputs.flatMap((i) => Object.keys(i.when || {})));
+  const switches = app.inputs.filter((i) => switchIds.has(i.id) && i.type === "select");
+  const out = switches.map((sw) => el("div", { class: "seg modes er-modeseg", role: "group", "aria-label": sw.label },
+    ...(sw.options || []).map((o) => el("button", { type: "button", "aria-pressed": String(String(o.value) === String(f.values[sw.id] ?? sw.default)),
+      onclick: () => { set(sw, o.value); rerender(); } }, MODE_ICON[o.value] ? icon(MODE_ICON[o.value]) : null, o.label))));
+  const shown = app.inputs.filter((i) => !switchIds.has(i.id) && shownIn(app, f, i));
+  out.push(...shown.filter((i) => i.type === "media").map((inp) => mediaBox(app, inp, rerender)));
+  const drops = shown.filter((i) => isMedia(i.type)).map((inp) => dropzone(app, inp, rerender, { short: true }));
+  // start and end, or the references, side by side
+  if (drops.length) out.push(el("div", { class: `er-drops n${Math.min(3, drops.length)}` }, ...drops));
+
+  const pi = promptInput(app);
+  const toggles = shown.filter((i) => i.type === "toggle");
+  const toggleChip = (inp) => {
+    const b = el("button", { class: "er-tool", type: "button", title: inp.help || inp.label });
+    const draw = () => {
+      const on = Boolean(f.values[inp.id]);
+      b.setAttribute("aria-pressed", String(on));
+      b.replaceChildren(icon(inp.id === "audio" ? (on ? "volume" : "mute") : "check"), `${inp.label} ${on ? "on" : "off"}`);
+    };
+    b.onclick = () => { set(inp, !f.values[inp.id]); draw(); };
+    draw();
+    return b;
+  };
+  if (pi) {
+    const ta = el("textarea", { class: "er-ta", rows: "4", "aria-label": pi.label, value: f.values[pi.id] ?? "",
+      placeholder: pi.default ? t("ws.eg", { x: pi.displayDefault ?? pi.default }) : pi.required ? t("ws.prompt.ph") : pi.help || t("ws.optional") });
+    const card = el("div", { class: "er-card er-prompt" }, el("span", { class: "lb" }, pi.label, pi.required ? null : el("small", {}, ` · ${t("ws.optional")}`)), ta,
+      toggles.length ? el("div", { class: "er-tools" }, ...toggles.map(toggleChip)) : null);
+    ta.addEventListener("input", () => { set(pi, ta.value); card.classList.remove("missing"); });
+    ui.refs[pi.id] = card;
+    out.push(card);
+  } else {
+    out.push(...toggles.map((inp) => el("div", { class: "er-card er-prompt" }, el("div", { class: "er-tools" }, toggleChip(inp)))));
+  }
+
+  const pickCard = (inp) => {
+    const value = el("b");
+    const sub = el("small");
+    const card = el("button", { class: "er-card er-pick", type: "button", title: inp.help || null, "aria-haspopup": "dialog" },
+      el("span", { class: "tx" }, el("span", { class: "lb" }, inp.label), value, sub), icon("chevR"));
+    const draw = () => {
+      const v = f.values[inp.id];
+      const [main, detail] = inp.type === "select" ? split(optionLabel(inp, v))
+        : inp.type === "slider" ? [`${v}${/\(s\)|seconds/i.test(inp.label) ? " s" : ""}`, ""]
+          : [String(v ?? "").trim() || t("ws.none"), ""];
+      value.textContent = main;
+      sub.textContent = detail;
+      sub.hidden = !detail;
+    };
+    draw();
+    card.onclick = () => {
+      const help = inp.help ? el("p", { class: "help", style: { padding: "6px 10px 4px", margin: 0 } }, inp.help) : null;
+      let content;
+      if (inp.type === "select") {
+        content = el("div", {}, el("h4", {}, inp.label), ...(inp.options || []).map((o) => {
+          const [a, b] = split(o.label);
+          return el("button", { class: "opt", type: "button", "aria-selected": String(String(o.value) === String(f.values[inp.id])),
+            onclick: () => { set(inp, o.value); draw(); closePopover(); } },
+          el("span", { class: "two" }, el("span", {}, a), b ? el("small", {}, b) : null), el("span", { class: "chk" }, icon("check")));
+        }), help);
+      } else if (inp.type === "slider") {
+        content = el("div", { class: "pad" }, rangeInput(inp, f.values[inp.id], (n) => { set(inp, n); draw(); }), help);
+      } else {
+        const box = el(inp.type === "textarea" ? "textarea" : "input", { type: inp.type === "number" ? "number" : "text", value: f.values[inp.id] ?? "",
+          placeholder: inp.default !== undefined ? String(inp.displayDefault ?? inp.default) : inp.label });
+        box.addEventListener("input", () => { set(inp, inp.type === "number" ? (box.value === "" ? "" : Number(box.value)) : box.value); draw(); });
+        content = el("div", { class: "pad" }, el("b", {}, inp.label), box, help);
+      }
+      popover(card, content, { width: Math.max(300, card.offsetWidth) });
+    };
+    return card;
+  };
+  const rest = shown.filter((i) => !isMedia(i.type) && i.type !== "media" && i !== pi && i.type !== "toggle" && !isAdvanced(i));
+  const model = rest.find((i) => i.id === "model");
+  if (model) out.push(pickCard(model));
+  const others = rest.filter((i) => i !== model);
+  if (others.length) out.push(el("div", { class: "er-grid" }, ...others.map(pickCard)));
+  return out;
+}
+
 function presetField(app, f) {
   const opts = [{ id: "", label: t("ws.preset.none") }, ...app.presets];
   const seg = el("div", { class: "seg", role: "group", "aria-label": t("ws.preset") });
@@ -650,9 +831,15 @@ function sidebarPanel(app, rerenderSide) {
   card.append(change);
 
   const main = [], adv = [];
-  for (const inp of app.inputs) {
-    if (isMedia(inp.type)) main.push(dropzone(app, inp, rerenderSide));
-    else (isAdvanced(inp) ? adv : main).push(sideField(app, inp, f, ui));
+  if (app.backend === "openrouter") {
+    main.push(...cardFields(app, f, ui, rerenderSide));
+    for (const inp of app.inputs) if (!isMedia(inp.type) && isAdvanced(inp) && shownIn(app, f, inp)) adv.push(sideField(app, inp, f, ui));
+  } else {
+    for (const inp of app.inputs) {
+      if (!shownIn(app, f, inp)) continue;
+      if (isMedia(inp.type)) main.push(dropzone(app, inp, rerenderSide));
+      else (isAdvanced(inp) ? adv : main).push(sideField(app, inp, f, ui));
+    }
   }
   if (app.presets?.length) adv.unshift(presetField(app, f));
   const advanced = adv.length ? el("details", { class: "adv" }, el("summary", {}, t("ws.advanced"), icon("chevD", "i-chev")), el("div", { class: "in" }, ...adv)) : null;

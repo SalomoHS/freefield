@@ -22,6 +22,15 @@
 //   GET    /api/models/licenses[?repos=a,b]  which licenses that token can already read
 // On your own Windows PC (start.ps1 sets FREEFIELD_DESKTOP_ICON=1), the desktop icon (server/desktop.ts):
 //   POST   /api/desktop-icon                 JSON { want }: put an icon on the desktop or not (/api/gpu has the state)
+// The Editing Room (server/editroom.ts; local only, not on a hosted demo):
+//   GET    /api/editroom                     the projects, newest first
+//   POST   /api/editroom                     multipart: "clip" (a video) or "from" (a /api/history/.../files/... link)
+//   GET    /api/editroom/:id                 one project · PATCH JSON { name?, cuts? } · DELETE
+//   POST   /api/editroom/:id/edits           multipart: app, op, title, engine, start, end, plus the app's own fields
+//                                            (its clip input is filled with that part of the final video) → the run
+//   DELETE /api/editroom/:id/edits/:edit     take an edit out of the final video (the run stays in History)
+//   POST   /api/editroom/:id/render          make sure the final video has every finished edit → { url, edits, waiting }
+//   GET    /api/editroom/:id/files/:name     source.mp4, poster.jpg, final-<hash>.mp4
 // Everything else is served from web/ when it exists (with byte ranges, so videos seek everywhere).
 // Hosted (server/guard.ts): FREEFIELD_PASSCODE closes every route behind a passcode, FREEFIELD_MAX_RUNS_PER_DAY and
 // FREEFIELD_MAX_ACTIVE cap the runs (429 past them), lab marks become read-only and uploads are capped at
@@ -38,6 +47,8 @@ import { Flags } from "./flags.ts";
 import { DOOR_HTML, foreign, Guard, ownerDoor, plainHttpToIp } from "./guard.ts";
 import { needOf, refusal, type Downloads } from "./models.ts";
 import { DesktopIcon } from "./desktop.ts";
+import { isOpenRouterApp, isOpenRouterJob, openRouterJob, submitOpenRouter } from "./openrouter.ts";
+import { EditRoom } from "./editroom.ts";
 
 const root = repoRoot();
 const { apps, problems } = loadRegistry(root);
@@ -78,12 +89,23 @@ const history = new History(join(outDir, "history"), {
     const app = apps.find((a) => a.id === id);
     if (!app) return undefined;
     const graph = app.graph ?? {};
-    return { outputs: app.outputs.map((o) => o.node), nodes: Object.keys(graph).length, classOf: (n) => graph[n]?.class_type ?? null };
+    // an OpenRouter job reports 0–100 %: a "workflow" of 100 steps turns that into the bar
+    const nodes = isOpenRouterApp(app) ? 100 : Object.keys(graph).length;
+    return { outputs: app.outputs.map((o) => o.node), nodes, classOf: (n) => graph[n]?.class_type ?? null };
   },
-  frames: (jobId, signal) => getRunner().frames(jobId, signal),
-  recheck: (jobId) => getRunner().jobs().get(jobId),
+  frames: (jobId, signal) => (isOpenRouterJob(jobId) ? noFrames() : getRunner().frames(jobId, signal)),
+  recheck: (jobId) => (isOpenRouterJob(jobId) ? openRouterJob(jobId) : getRunner().jobs().get(jobId)),
 });
+async function* noFrames() {}   // OpenRouter jobs have no event stream: the history polls them
 const flags = new Flags(join(root, "lab", "flags.json"), apps);
+// an edit's video: the first video output of its run, once it succeeded
+const editRoom = new EditRoom(join(outDir, "editroom"), (entryId) => {
+  const e = history.get(entryId);
+  if (!e) return null;
+  const out = e.outputs.find((o: { type: string }) => o.type === "video") as { url: string } | undefined;
+  const name = out ? decodeURIComponent(out.url.split("/").pop() ?? "") : "";
+  return { status: e.status, file: e.status === "succeeded" && name ? history.file(entryId, name) : null };
+});
 const desktopIcon = DesktopIcon.fromEnv();
 
 const MIME: Record<string, string> = {
@@ -104,7 +126,7 @@ function loadExamples(): Record<string, unknown> {
   }
 }
 
-const runnable = (a: App) => Boolean(a.workflowPath) && (a.status === "ready" || draftsAllowed);
+const runnable = (a: App) => (Boolean(a.workflowPath) || isOpenRouterApp(a)) && (a.status === "ready" || draftsAllowed);
 
 /** The pack an app needs whose files the backend does not have, or null (see needOf for why they are missing). */
 function missingPack(a: App, files: Set<string> | null): string | null {
@@ -165,6 +187,7 @@ async function modelsView(fresh = false) {
 function publicApp(a: App, files: Set<string> | null = null, downloads: Downloads | null = null) {
   return {
     id: a.id, name: a.name, section: a.section, summary: a.summary ?? "", status: a.status, pack: a.pack,
+    backend: a.backend ?? "comfyui",
     runnable: runnable(a),
     missing_pack: missingPack(a, files),
     needs: needOf(a, files, downloads),
@@ -234,6 +257,18 @@ async function readValues(app: App, request: Request): Promise<{ values: Values;
   const form = await request.formData();
   const values: Values = {};
   for (const input of app.inputs) {
+    if (input.type === "media") {
+      // several files under one name, in order
+      const files = form.getAll(input.id);
+      if (!files.length) continue;
+      const list = [];
+      for (const f of files) {
+        if (typeof f === "string") throw new InputError(`${input.id}: expected file uploads`);
+        list.push({ bytes: new Uint8Array(await f.arrayBuffer()), name: f.name, type: f.type });
+      }
+      values[input.id] = list;
+      continue;
+    }
     const v = form.get(input.id);
     if (v === null) continue;
     if (isFileInput(input)) {
@@ -262,7 +297,7 @@ function startRun(app: App, values: Values, preset?: string, owner?: string) {
   const entry = history.start(app, values, preset, owner);
   void (async () => {
     try {
-      const job = await getRunner().submit(app, values, preset);
+      const job = isOpenRouterApp(app) ? await submitOpenRouter(app, values) : await getRunner().submit(app, values, preset);
       contact();
       await history.follow(entry, job);
     } catch (e) {
@@ -371,7 +406,7 @@ const server = createServer(async (req, res) => {
       if (req.method === "POST" && area === "apps" && sub === "run") {
         const app = byId.get(id);
         if (!app) return send(res, 404, { error: "unknown app" });
-        if (!app.workflowPath) throw new InputError(`${app.id} has no workflow yet`);
+        if (!app.workflowPath && !isOpenRouterApp(app)) throw new InputError(`${app.id} has no workflow yet`);
         if (!runnable(app)) throw new InputError(`${app.id} is a draft; start the server with FREEFIELD_DRAFTS=1 to run it anyway`);
         const { files, downloads } = await backendState();
         const need = needOf(app, files, downloads);
@@ -407,6 +442,85 @@ const server = createServer(async (req, res) => {
         }
         if (req.method === "POST" && sub === "cancel") return send(res, 200, { canceled: await history.cancel(id, me) });
         if (req.method === "DELETE" && id && !sub) return send(res, history.remove(id, me) ? 200 : 404, { removed: id });
+      }
+      if (area === "editroom") {
+        if (guard.hosted) return send(res, 404, { error: "not found" });
+        const withUrls = (p: { id: string }) => ({ ...p, poster: `/api/editroom/${p.id}/files/poster.jpg`, source_url: `/api/editroom/${p.id}/files/source.mp4` });
+        if (req.method === "GET" && !id) return send(res, 200, { projects: editRoom.list().map(withUrls) });
+        if (req.method === "POST" && !id) {
+          const form = await (await toRequest(req)).formData();
+          const clip = form.get("clip");
+          const from = form.get("from");
+          const named = form.get("name");
+          let bytes: Uint8Array;
+          let name: string;
+          if (clip && typeof clip !== "string") {
+            bytes = new Uint8Array(await clip.arrayBuffer());
+            name = clip.name;
+          } else if (typeof from === "string") {
+            const m = /^\/api\/history\/([^/]+)\/files\/([^/?#]+)$/.exec(from);
+            const file = m ? history.file(m[1], decodeURIComponent(m[2]), me) : null;
+            if (!file) throw new InputError("that video is not in History");
+            bytes = new Uint8Array(readFileSync(file));
+            name = typeof named === "string" && named ? named : decodeURIComponent(m![2]);
+          } else {
+            throw new InputError('expected "clip" (a video file) or "from" (a History link)');
+          }
+          return send(res, 201, withUrls(await editRoom.create(bytes, name)));
+        }
+        if (id && !sub) {
+          if (req.method === "GET") {
+            const p = editRoom.get(id);
+            return p ? send(res, 200, withUrls(p)) : send(res, 404, { error: "unknown project" });
+          }
+          if (req.method === "PATCH") {
+            const body = await (await toRequest(req)).json().catch(() => null) as { name?: unknown; cuts?: unknown } | null;
+            if (!body) throw new InputError("expected JSON { name?, cuts? }");
+            return send(res, 200, withUrls(editRoom.update(id, body)));
+          }
+          if (req.method === "DELETE") return send(res, editRoom.remove(id) ? 200 : 404, { removed: id });
+        }
+        if ((req.method === "GET" || req.method === "HEAD") && sub === "files" && arg) {
+          const file = editRoom.file(id, arg);
+          return file ? sendFile(req, res, file, arg.startsWith("final-") ? "private, max-age=31536000, immutable" : "no-cache") : send(res, 404, { error: "not found" });
+        }
+        if (req.method === "POST" && sub === "render") {
+          const r = await editRoom.render(id);
+          return send(res, 200, { url: `/api/editroom/${id}/files/${r.file}`, edits: r.edits, waiting: r.waiting });
+        }
+        if (req.method === "DELETE" && sub === "edits" && arg) return send(res, 200, withUrls(editRoom.removeEdit(id, arg)));
+        if (req.method === "POST" && sub === "edits" && !arg) {
+          if (!editRoom.get(id)) return send(res, 404, { error: "unknown project" });
+          const form = await (await toRequest(req)).formData();
+          const app = byId.get(String(form.get("app") ?? ""));
+          if (!app) throw new InputError("unknown app");
+          const clipInput = app.inputs.find((i) => i.type === "video");
+          if (!clipInput) throw new InputError(`${app.id} takes no video`);
+          if (!app.workflowPath && !isOpenRouterApp(app)) throw new InputError(`${app.id} has no workflow yet`);
+          if (!runnable(app)) throw new InputError(`${app.id} is a draft`);
+          const { files, downloads } = await backendState();
+          const need = needOf(app, files, downloads);
+          if (need) throw new InputError(refusal(app.id, need));
+          const refused = guard.refuse(activeRuns());
+          if (refused) return send(res, 429, { error: refused });
+          const start = Number(form.get("start"));
+          const end = Number(form.get("end"));
+          const meta = { op: String(form.get("op") ?? "edit"), title: String(form.get("title") ?? "Edit"), engine: String(form.get("engine") ?? app.id) };
+          admitting++;
+          let view;
+          try {
+            const part = await editRoom.part(id, start, end);
+            form.set(clipInput.id, new File([new Uint8Array(part)], "part.mp4", { type: "video/mp4" }));
+            const { values, preset } = await readValues(app, new Request("http://local/", { method: "POST", body: form }));
+            view = startRun(app, resolveValues(app, values), preset, me);
+          } finally {
+            admitting--;
+          }
+          guard.record();
+          const project = editRoom.addEdit(id, { ...meta, prompt: String(form.get("prompt") ?? ""), start, end, entry: view.id });
+          return send(res, 202, { project: withUrls(project), entry: view });
+        }
+        return send(res, 404, { error: "not found" });
       }
       if (area === "gpu") {
         if (req.method === "GET" && !id) return send(res, 200, await gpuStatus(url.searchParams.get("device") === "1"));
@@ -493,7 +607,7 @@ const server = createServer(async (req, res) => {
 });
 
 // runs that were still going when the server stopped are followed again
-history.resume(async (jobId) => getRunner().jobs().get(jobId));
+history.resume(async (jobId) => (isOpenRouterJob(jobId) ? openRouterJob(jobId) : getRunner().jobs().get(jobId)));
 
 server.listen(port, host, () => console.log(`freefield on http://${host}:${port} (${apps.length} apps)`
   + (guard.passcode ? " · passcode required" : "") + (guard.maxRunsPerDay ? ` · ${guard.maxRunsPerDay} runs a day` : "")));

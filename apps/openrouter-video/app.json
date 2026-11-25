@@ -1,0 +1,144 @@
+{
+  "$schema": "../../schema/app.schema.json",
+  "id": "openrouter-video",
+  "name": "OpenRouter Video",
+  "section": "video",
+  "pack": "openrouter",
+  "backend": "openrouter",
+  "status": "ready",
+  "summary": "Makes a video from a prompt, a start (and end) frame or references (images, video, audio), or extends a clip, with hosted models through OpenRouter.",
+  "inputs": [
+    {
+      "id": "mode",
+      "type": "select",
+      "label": "Make",
+      "default": "frames",
+      "options": [
+        { "value": "frames", "label": "Start frame" },
+        { "value": "start_end", "label": "Start & end" },
+        { "value": "refs", "label": "References" },
+        { "value": "extend", "label": "Extend Video" }
+      ]
+    },
+    {
+      "id": "image",
+      "type": "image",
+      "label": "Start frame",
+      "help": "The first frame of the clip, e.g. a character or scene made in the image apps. Leave it empty for text to video.",
+      "limits": { "max_mb": 20 },
+      "when": { "mode": ["frames", "start_end"] }
+    },
+    {
+      "id": "end",
+      "type": "image",
+      "label": "End frame",
+      "help": "Where the clip lands. Takes a model with an end frame: Veo 3.1, Seedance, Wan 3.0, Hailuo 3, Grok Imagine 1.5, Gemini Omni, FLUX 3.",
+      "limits": { "max_mb": 20 },
+      "when": { "mode": ["start_end"] }
+    },
+    {
+      "id": "refs",
+      "type": "media",
+      "label": "Add references",
+      "help": "Images, video or audio: a person, product, place, style or sound for the model to use. It takes the look, not the exact frame. Video and audio work on Seedance 2.",
+      "limits": { "max_mb": 50, "max_files": 12 },
+      "when": { "mode": ["refs"] }
+    },
+    {
+      "id": "previous",
+      "type": "video",
+      "label": "Video to extend",
+      "help": "Its last frame starts the new shot; the result is your video with the new shot joined on, at your video's size.",
+      "limits": { "max_mb": 100 },
+      "when": { "mode": ["extend"] }
+    },
+    {
+      "id": "prompt",
+      "type": "textarea",
+      "label": "Prompt",
+      "required": true,
+      "default": "slow dolly in, light rain falling, neon reflections shimmering on the wet street, cinematic"
+    },
+    {
+      "id": "model",
+      "type": "select",
+      "label": "Model",
+      "help": "Prices are OpenRouter's per second of video at 720p, as listed in November 2026. A value a model does not offer (duration, resolution) moves to the nearest one it does.",
+      "default": "x-ai/grok-imagine-video-1.5-lite",
+      "options": [
+        { "value": "x-ai/grok-imagine-video-1.5-lite", "label": "Grok Imagine 1.5 Lite · $0.03/s" },
+        { "value": "google/veo-3.1-lite", "label": "Veo 3.1 Lite · $0.03–0.05/s" },
+        { "value": "google/gemini-omni-1.2-flash", "label": "Gemini Omni 1.2 Flash · $0.07/s" },
+        { "value": "x-ai/grok-imagine-video", "label": "Grok Imagine · $0.07/s" },
+        { "value": "minimax/hailuo-3-max", "label": "Hailuo 3 Max · $0.08/s (768p)" },
+        { "value": "minimax/hailuo-2.3", "label": "Hailuo 2.3 · $0.08/s (1080p)" },
+        { "value": "alibaba/happyhorse-1.1", "label": "HappyHorse 1.1 · $0.10/s" },
+        { "value": "alibaba/wan-3.0", "label": "Wan 3.0 · $0.10/s" },
+        { "value": "google/veo-3.1-fast", "label": "Veo 3.1 Fast · $0.08–0.10/s" },
+        { "value": "bytedance/seedance-2.0-mini", "label": "Seedance 2.0 Mini · per token" },
+        { "value": "bytedance/seedance-2.0-fast", "label": "Seedance 2.0 Fast · per token" },
+        { "value": "bytedance/seedance-2.5-flash", "label": "Seedance 2.5 Flash · per token" },
+        { "value": "runway/gen-4.5", "label": "Runway Gen-4.5 · $0.12/s" },
+        { "value": "minimax/hailuo-3", "label": "Hailuo 3 · $0.13/s (2K)" },
+        { "value": "alibaba/wan-3.0-prime", "label": "Wan 3.0 Prime · $0.14/s" },
+        { "value": "x-ai/grok-imagine-video-1.5", "label": "Grok Imagine 1.5 · $0.14/s" },
+        { "value": "bytedance/seedance-2.0", "label": "Seedance 2.0 · per token" },
+        { "value": "bytedance/seedance-2.5", "label": "Seedance 2.5 · per token" },
+        { "value": "black-forest-labs/flux-3-video", "label": "FLUX 3 Video · $0.17/s" },
+        { "value": "google/veo-3.1", "label": "Veo 3.1 · $0.20–0.40/s" }
+      ]
+    },
+    {
+      "id": "duration",
+      "type": "select",
+      "label": "Duration",
+      "default": 5,
+      "options": [
+        { "value": 4, "label": "4 s" },
+        { "value": 5, "label": "5 s" },
+        { "value": 6, "label": "6 s" },
+        { "value": 8, "label": "8 s" },
+        { "value": 10, "label": "10 s" }
+      ]
+    },
+    {
+      "id": "resolution",
+      "type": "select",
+      "label": "Resolution",
+      "default": "720p",
+      "options": [
+        { "value": "480p", "label": "480p" },
+        { "value": "720p", "label": "720p" },
+        { "value": "1080p", "label": "1080p" }
+      ]
+    },
+    {
+      "id": "aspect",
+      "type": "select",
+      "label": "Aspect ratio",
+      "default": "auto",
+      "options": [
+        { "value": "auto", "label": "Auto" },
+        { "value": "16:9", "label": "16:9" },
+        { "value": "9:16", "label": "9:16" },
+        { "value": "1:1", "label": "1:1" }
+      ]
+    },
+    {
+      "id": "audio",
+      "type": "toggle",
+      "label": "Sound",
+      "help": "Models that make audio add it; it costs more on some (Veo).",
+      "default": false
+    }
+  ],
+  "outputs": [
+    {
+      "node": "openrouter",
+      "type": "video"
+    }
+  ],
+  "models": [],
+  "credits": ["OpenRouter video API: https://openrouter.ai/docs/guides/overview/multimodal/video-generation"],
+  "notes": "Runs on OpenRouter, not on your GPU. The key comes from OPENROUTER_API_KEY or the file OPENROUTER_ENV_FILE names. A canceled run stops here only: OpenRouter has no cancel call."
+}

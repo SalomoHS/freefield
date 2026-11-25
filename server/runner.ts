@@ -7,6 +7,16 @@ import { isFileInput, modelKey } from "./registry.ts";
 export type FileValue = { bytes: Uint8Array; name: string; type?: string };
 export type Values = Record<string, unknown>;
 
+/** What a file in a media input is, by its type or else its name; a file that says nothing counts as an image. */
+export function mediaKind(f: Pick<FileValue, "name" | "type">): "image" | "video" | "audio" {
+  const top = (f.type ?? "").split("/")[0];
+  if (top === "image" || top === "video" || top === "audio") return top;
+  const ext = /\.([a-z0-9]+)$/i.exec(f.name)?.[1].toLowerCase() ?? "";
+  if (["mp4", "mov", "webm", "mkv"].includes(ext)) return "video";
+  if (["mp3", "wav", "flac", "ogg", "m4a", "opus"].includes(ext)) return "audio";
+  return "image";
+}
+
 /** Anything with setInput, so tests can pass a fake instead of the SDK's Workflow. */
 export type Settable = { setInput(node: string, field: string, value: unknown): unknown };
 
@@ -88,10 +98,22 @@ export function resolveValues(app: App, values: Values): Values {
       v = Math.floor(Math.random() * 2 ** 48);
     }
     if (v === undefined) {
-      if (input.required || isFileInput(input)) throw new InputError(`${input.id}: required`);
+      // a workflow's file node always needs a file; an OpenRouter app (no workflow) leaves out what is not marked required
+      if (input.required || (isFileInput(input) && app.backend !== "openrouter")) throw new InputError(`${input.id}: required`);
       continue;
     }
-    if (isFileInput(input)) {
+    if (input.type === "media") {
+      // several files: a list, each one checked like a single upload
+      const list = Array.isArray(v) ? v : [v];
+      if (!list.every(isFileValue)) throw new InputError(`${input.id}: expected files`);
+      if (!list.length) { if (input.required) throw new InputError(`${input.id}: required`); continue; }
+      const most = input.limits?.max_files;
+      if (most && list.length > most) throw new InputError(`${input.id}: ${most} files at most`);
+      const maxMb = input.limits?.max_mb;
+      const big = maxMb ? list.find((f) => f.bytes.byteLength > maxMb * 1e6) : undefined;
+      if (big) throw new InputError(`${input.id}: ${big.name} is over ${maxMb} MB`);
+      out[input.id] = list;
+    } else if (isFileInput(input)) {
       if (!isFileValue(v)) throw new InputError(`${input.id}: expected a file`);
       const maxMb = input.limits?.max_mb;
       if (maxMb && v.bytes.byteLength > maxMb * 1e6) throw new InputError(`${input.id}: file is over ${maxMb} MB`);

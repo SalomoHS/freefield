@@ -12,7 +12,7 @@ import { extname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import type { ComfyEvent } from "@comfyorg/sdk";
 import { isFileInput, type App } from "./registry.ts";
-import type { FileValue, Frame, Values } from "./runner.ts";
+import { mediaKind as fileKind, type FileValue, type Frame, type Values } from "./runner.ts";
 
 export type Status = "starting" | "queued" | "running" | "succeeded" | "failed" | "canceled" | "expired" | "lost";
 const TERMINAL = new Set<Status>(["succeeded", "failed", "canceled", "expired", "lost"]);
@@ -235,7 +235,14 @@ export class History {
     for (const input of app.inputs) {
       const v = values[input.id];
       if (v === undefined) continue;
-      if (isFileInput(input)) {
+      if (input.type === "media") {
+        // one record per file, in order (Again puts them back the same way)
+        (v as FileValue[]).forEach((f, n) => {
+          const file = `input-${input.id}-${n + 1}${safeExt(f.name, f.type)}`;
+          writeFileSync(join(folder, file), f.bytes);
+          inputs.push({ id: input.id, type: fileKind(f), file, name: f.name || file });
+        });
+      } else if (isFileInput(input)) {
         const f = v as FileValue;
         const file = `input-${input.id}${safeExt(f.name, f.type)}`;
         writeFileSync(join(folder, file), f.bytes);

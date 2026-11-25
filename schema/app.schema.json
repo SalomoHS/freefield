@@ -34,6 +34,10 @@
       "pattern": "\\.api\\.json$",
       "description": "ComfyUI workflow in API format, relative to the app folder."
     },
+    "backend": {
+      "enum": ["comfyui", "openrouter"],
+      "description": "Where the app runs. comfyui (default): its workflow on your GPU. openrouter: a hosted model through the OpenRouter API (server/openrouter.ts); no workflow, no models, billed by OpenRouter."
+    },
     "source": {
       "type": "object",
       "additionalProperties": false,
@@ -116,7 +120,7 @@
       "required": ["id", "type", "label"],
       "properties": {
         "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
-        "type": { "enum": ["text", "textarea", "number", "slider", "select", "toggle", "seed", "image", "video", "audio"] },
+        "type": { "enum": ["text", "textarea", "number", "slider", "select", "toggle", "seed", "image", "video", "audio", "media"], "description": "media: several files at once, each an image, a video or an audio clip (OpenRouter references)." },
         "label": { "type": "string" },
         "help": { "type": "string" },
         "default": {},
@@ -141,6 +145,12 @@
             "ordered": { "type": "boolean", "description": "The order of picking matters (camera moves): the UI numbers the picks." }
           }
         },
+        "when": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "type": "array", "minItems": 1 },
+          "description": "Shown only while each named input (a select) has one of the listed values, e.g. { \"mode\": [\"refs\"] }. The backend leaves it out otherwise."
+        },
         "paint": {
           "type": "string",
           "description": "Image inputs only: the id of the image input this one is painted over in the web UI (inpaint). The upload is a white-on-black mask of that image."
@@ -150,6 +160,7 @@
           "additionalProperties": false,
           "properties": {
             "max_mb": { "type": "number" },
+            "max_files": { "type": "integer", "minimum": 1, "description": "media inputs: how many files at most." },
             "seconds": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }
           }
         },
