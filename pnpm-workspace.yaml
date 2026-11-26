@@ -1,0 +1,2 @@
+# The repo is installed with npm (package-lock.json). Without this, pnpm reinstalls node_modules before "pnpm app".
+verifyDepsBeforeRun: false

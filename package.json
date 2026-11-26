@@ -11,7 +11,7 @@
   "scripts": {
     "validate": "node --experimental-strip-types --disable-warning=ExperimentalWarning server/cli.ts validate",
     "apps": "node --experimental-strip-types --disable-warning=ExperimentalWarning server/cli.ts apps",
-    "app": "node --env-file-if-exists=.env --experimental-strip-types --disable-warning=ExperimentalWarning server/cli.ts app",
+    "app": "node tools/app.mjs",
     "serve": "node --env-file-if-exists=.env --experimental-strip-types --disable-warning=ExperimentalWarning server/server.ts",
     "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
